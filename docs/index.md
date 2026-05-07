@@ -20,6 +20,11 @@ ShowcaseApp is an elegant application designed to transform your devices into be
   <a href="https://play.google.com/store/apps/details?id=com.alpha.showcase"><img src="https://raw.githubusercontent.com/mrjoechen/ShowcaseApp/main/docs/images/google-play-badge.png" width="323" height="125" /></a>
   <a href="https://github.com/mrjoechen/ShowcaseApp/releases/latest"><img src="https://raw.githubusercontent.com/mrjoechen/ShowcaseApp/main/docs/images/github-badge.png" width="323" height="125" /></a>
 </p>
+
+> The iOS version is still on TestFlight.
+
+[<img src="/docs/images/apple_app_store_badge.png" width="323" height="125" />](https://testflight.apple.com/join/D8va19RR)
+
   
 ## Preview
 
