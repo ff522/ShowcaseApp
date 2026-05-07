@@ -23,7 +23,7 @@ ShowcaseApp is an elegant application designed to transform your devices into be
 
 > The iOS version is still on TestFlight.
 
-[<img src="/docs/images/apple_app_store_badge.png" width="323" height="125" />](https://testflight.apple.com/join/D8va19RR)
+[<img src="https://raw.githubusercontent.com/mrjoechen/ShowcaseApp/main/docs/images/apple_app_store_badge.png" width="323" height="125" />](https://testflight.apple.com/join/D8va19RR)
 
   
 ## Preview
