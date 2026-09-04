@@ -1,0 +1,308 @@
+name: Deploy Web
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-web
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build JS
+    runs-on: ubuntu-latest
+    environment: deploy_web_showcase
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # Shared modules use 17; desktop configuration needs 21 as the default JDK.
+          java-version: |
+            17
+            21
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Check required secrets
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: |
+          missing=0
+          for key in SUPABASE_URL SUPABASE_ANON_KEY SENTRY_DSN; do
+            if [ -z "${!key}" ]; then
+              echo "Missing Actions secret: $key"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Add the secrets under Settings → Environments → deploy_web_showcase → Environment secrets, then re-run."
+            exit 1
+          fi
+
+      - name: Write local.properties
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          IP_GEO_API_KEY: ${{ secrets.IP_GEO_API_KEY }}
+        run: |
+          {
+            printf 'sdk.dir=%s\n' "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+            printf 'SUPABASE_URL=%s\n' "$SUPABASE_URL"
+            printf 'SUPABASE_ANON_KEY=%s\n' "$SUPABASE_ANON_KEY"
+            printf 'SENTRY_DSN=%s\n' "$SENTRY_DSN"
+            printf 'IP_GEO_API_KEY=%s\n' "$IP_GEO_API_KEY"
+          } > local.properties
+
+      - name: Lower Gradle memory for CI
+        run: |
+          # The checked-in file may not end with a newline; keep appended keys separate.
+          printf '\n%s\n' \
+            'org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8' \
+            'kotlin.daemon.jvmargs=-Xmx2g' >> gradle.properties
+
+      - name: Test S3 signing in web browsers
+        run: |
+          chmod +x gradlew
+          ./gradlew \
+            :showcase-api:jsBrowserTest \
+            :showcase-api:wasmJsBrowserTest \
+            --tests 'com.alpha.showcase.api.S3ApiTest' \
+            --no-daemon \
+            --build-cache \
+            --console=plain \
+            --stacktrace
+
+      - name: Build JS production distribution
+        env:
+          GITHUB_PAGES: "true"
+        run: |
+          chmod +x gradlew
+          ./gradlew :composeApp:jsBrowserDistribution --no-daemon --build-cache --profile --console=plain --stacktrace
+
+      - name: Upload build timing report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: js-build-timing
+          path: build/reports/profile/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Validate JS production distribution
+        run: |
+          set -euo pipefail
+
+          dist="composeApp/build/dist/js/productionExecutable"
+          if [ ! -f "$dist/index.html" ]; then
+            echo "Complete JS production distribution was not found: $dist"
+            exit 1
+          fi
+
+          python3 - "$dist" <<'PY'
+          import re
+          import sys
+          from html.parser import HTMLParser
+          from pathlib import Path
+
+          class EntryParser(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.bases = []
+
+              def handle_starttag(self, tag, attrs):
+                  if tag == "base":
+                      self.bases.append(dict(attrs).get("href", ""))
+
+          dist = Path(sys.argv[1])
+          entry = EntryParser()
+          entry.feed((dist / "index.html").read_text(encoding="utf-8"))
+          if len(entry.bases) != 1 or not re.fullmatch(r"\./_showcase/[0-9a-f]{64}/", entry.bases[0]):
+              sys.exit("Production index must contain exactly one generated, versioned asset base.")
+          release = dist / entry.bases[0]
+          if not release.is_dir() or not (release / "ShowcaseApp.js").is_file():
+              sys.exit("Versioned production assets are incomplete.")
+          print(f"Validated JS distribution: {release}")
+          PY
+
+      - name: Upload JS distribution artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: js-production-distribution
+          path: composeApp/build/dist/js/productionExecutable/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Build existing docs site
+        uses: actions/jekyll-build-pages@v1
+        with:
+          source: ./docs
+          destination: ./site
+
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Assemble Pages artifact
+        run: |
+          set -euo pipefail
+
+          dist="composeApp/build/dist/js/productionExecutable"
+
+          # Jekyll's container can leave its generated site owned by root.
+          sudo chown -R --no-dereference "$(id -u):$(id -g)" site
+          # Copy the generated relative base unchanged; it also works under /<repo>/web/.
+          mkdir -p site/web
+          cp -a "$dist"/. site/web/
+          touch site/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+          include-hidden-files: true
+
+  deploy:
+    name: Deploy GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  deploy-racknerd:
+    name: Deploy RackNerd
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: racknerd-showcase
+      url: https://showcase.joechen.space/app/
+    env:
+      RACKNERD_HOST: ${{ vars.RACKNERD_HOST }}
+      RACKNERD_USER: ${{ vars.RACKNERD_USER }}
+      RACKNERD_PORT: ${{ vars.RACKNERD_PORT }}
+      RACKNERD_SSH_PRIVATE_KEY: ${{ secrets.RACKNERD_SSH_PRIVATE_KEY }}
+      RACKNERD_SSH_KNOWN_HOSTS: ${{ secrets.RACKNERD_SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Check RackNerd deployment configuration
+        run: |
+          set -euo pipefail
+
+          missing=0
+          for key in \
+            RACKNERD_HOST \
+            RACKNERD_USER \
+            RACKNERD_SSH_PRIVATE_KEY \
+            RACKNERD_SSH_KNOWN_HOSTS; do
+            if [ -z "${!key}" ]; then
+              echo "Missing racknerd-showcase environment configuration: $key"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Download JS distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: js-production-distribution
+          path: dist
+
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+
+          ssh_key_file="$RUNNER_TEMP/racknerd_deploy_key"
+          ssh_known_hosts_file="$RUNNER_TEMP/racknerd_known_hosts"
+          install -m 600 /dev/null "$ssh_key_file"
+          printf '%s\n' "$RACKNERD_SSH_PRIVATE_KEY" > "$ssh_key_file"
+          install -m 600 /dev/null "$ssh_known_hosts_file"
+          printf '%s\n' "$RACKNERD_SSH_KNOWN_HOSTS" > "$ssh_known_hosts_file"
+
+      - name: Deploy to RackNerd
+        run: |
+          set -euo pipefail
+
+          deploy_path="/opt/1panel/www/sites/showcase.joechen.space/index/app"
+          port="${RACKNERD_PORT:-22}"
+          remote="$RACKNERD_USER@$RACKNERD_HOST"
+          ssh_key_file="$RUNNER_TEMP/racknerd_deploy_key"
+          ssh_known_hosts_file="$RUNNER_TEMP/racknerd_known_hosts"
+          ssh_command="ssh -i $ssh_key_file -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$ssh_known_hosts_file -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -p $port"
+
+          if [[ ! "$RACKNERD_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
+            echo "RACKNERD_HOST must be an IPv4 address or DNS hostname."
+            exit 1
+          fi
+          if [[ ! "$RACKNERD_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+            echo "RACKNERD_USER is not a valid Linux user name."
+            exit 1
+          fi
+          if [[ ! "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+            echo "RACKNERD_PORT must be between 1 and 65535."
+            exit 1
+          fi
+
+          if [ ! -f dist/index.html ] || [ ! -d dist/_showcase ]; then
+            echo "Downloaded JS distribution is incomplete."
+            exit 1
+          fi
+
+          # Upload immutable, versioned assets before publishing the new entry point.
+          ssh \
+            -i "$ssh_key_file" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$ssh_known_hosts_file" \
+            -o ConnectTimeout=15 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=3 \
+            -p "$port" \
+            "$remote" "install -d -m 0755 '$deploy_path/_showcase'"
+          rsync -az --partial --chmod=D755,F644 \
+            -e "$ssh_command" \
+            dist/_showcase/ "$remote:$deploy_path/_showcase/"
+
+          # Keep old hash directories for clients that still have an older index open.
+          rsync -az --partial --chmod=D755,F644 \
+            --exclude='_showcase/' \
+            --exclude='index.html' \
+            -e "$ssh_command" \
+            dist/ "$remote:$deploy_path/"
+
+          # rsync writes through a temporary file and renames it into place.
+          rsync -az --chmod=F644 \
+            -e "$ssh_command" \
+            dist/index.html "$remote:$deploy_path/index.html"

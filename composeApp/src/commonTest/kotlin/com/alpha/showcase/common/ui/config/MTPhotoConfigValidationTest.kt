@@ -3,6 +3,7 @@ package com.alpha.showcase.common.ui.config
 import com.alpha.showcase.common.networkfile.storage.remote.MTPHOTO_AUTH_TYPE_API_KEY
 import com.alpha.showcase.common.networkfile.storage.remote.MTPHOTO_AUTH_TYPE_PASSWORD
 import com.alpha.showcase.common.networkfile.storage.remote.MTPhotoSource
+import com.alpha.showcase.common.utils.ConnectionProbeTimeoutException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runTest
@@ -107,7 +108,7 @@ class MTPhotoConfigValidationTest {
 
         assertTrue(result.isFailure)
         assertEquals(
-            "MTPhoto album loading timed out after 10 seconds",
+            "Connection probe timed out after 10 seconds",
             result.exceptionOrNull()?.message,
         )
     }
@@ -123,6 +124,62 @@ class MTPhotoConfigValidationTest {
         }
 
         assertEquals(cancellation.message, thrown.message)
+    }
+
+    @Test
+    fun httpsPagesRejectHttpMTPhotoBeforeStartingTheRequest() {
+        assertEquals(
+            BrowserConnectionProblem.MixedContent,
+            classifyBrowserConnectionProblem(
+                pageProtocol = "https:",
+                baseUrl = "http://photos.example.test:8063",
+            ),
+        )
+        assertNull(
+            classifyBrowserConnectionProblem(
+                pageProtocol = "https:",
+                baseUrl = "https://photos.example.test",
+            )
+        )
+        assertNull(
+            classifyBrowserConnectionProblem(
+                pageProtocol = "http:",
+                baseUrl = "http://photos.example.test:8063",
+            )
+        )
+    }
+
+    @Test
+    fun browserFetchFailuresAndTimeoutsExplainTheCorsRequirement() {
+        listOf(
+            ConnectionProbeTimeoutException(10_000),
+            IllegalStateException("TypeError: Failed to fetch"),
+            IllegalStateException("NetworkError when attempting to fetch resource"),
+        ).forEach { error ->
+            assertEquals(
+                BrowserConnectionProblem.BrowserAccess,
+                classifyBrowserConnectionProblem(
+                    pageProtocol = "https:",
+                    baseUrl = "https://photos.example.test",
+                    error = error,
+                ),
+            )
+        }
+
+        assertNull(
+            classifyBrowserConnectionProblem(
+                pageProtocol = null,
+                baseUrl = "https://photos.example.test",
+                error = ConnectionProbeTimeoutException(10_000),
+            )
+        )
+        assertNull(
+            classifyBrowserConnectionProblem(
+                pageProtocol = "https:",
+                baseUrl = "https://photos.example.test",
+                error = IllegalStateException("HTTP 401 Unauthorized"),
+            )
+        )
     }
 
     private fun apiKeySource() = MTPhotoSource(

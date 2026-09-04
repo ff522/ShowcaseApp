@@ -52,9 +52,9 @@ import com.alpha.showcase.common.utils.checkName
 import com.alpha.showcase.common.utils.checkUrl
 import com.alpha.showcase.common.utils.decodeName
 import com.alpha.showcase.common.utils.encodeName
+import com.alpha.showcase.common.utils.runConnectionProbe
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 import org.jetbrains.compose.resources.stringResource
 import showcaseapp.composeapp.generated.resources.Res
 import showcaseapp.composeapp.generated.resources.Url
@@ -65,7 +65,9 @@ import showcaseapp.composeapp.generated.resources.auth_type_user_and_pass
 import showcaseapp.composeapp.generated.resources.mtphoto_album_required
 import showcaseapp.composeapp.generated.resources.mtphoto_albums_loaded
 import showcaseapp.composeapp.generated.resources.mtphoto_api_key_required
+import showcaseapp.composeapp.generated.resources.mtphoto_browser_access_error
 import showcaseapp.composeapp.generated.resources.mtphoto_password_required
+import showcaseapp.composeapp.generated.resources.mtphoto_web_mixed_content_error
 import showcaseapp.composeapp.generated.resources.mtphoto_username_required
 import showcaseapp.composeapp.generated.resources.save
 import showcaseapp.composeapp.generated.resources.source_name
@@ -112,19 +114,10 @@ internal fun isCurrentMTPhotoAlbumResponse(
 
 internal const val MTPHOTO_ALBUM_LOAD_TIMEOUT_MILLIS = 10_000L
 
-private data class CompletedMTPhotoAlbumLoad<T>(val result: Result<T>)
-
 internal suspend fun <T> loadMTPhotoAlbumsWithTimeout(
     timeoutMillis: Long = MTPHOTO_ALBUM_LOAD_TIMEOUT_MILLIS,
     loader: suspend () -> Result<T>,
-): Result<T> {
-    val completed = withTimeoutOrNull(timeoutMillis) {
-        CompletedMTPhotoAlbumLoad(loader())
-    }
-    return completed?.result ?: Result.failure(
-        IllegalStateException("MTPhoto album loading timed out after 10 seconds")
-    )
-}
+): Result<T> = runConnectionProbe(timeoutMillis, loader)
 
 @Composable
 fun MTPhotoConfigPage(
@@ -170,6 +163,8 @@ fun MTPhotoConfigPage(
     val passwordRequiredMessage = stringResource(Res.string.mtphoto_password_required)
     val albumRequiredMessage = stringResource(Res.string.mtphoto_album_required)
     val albumsLoadedMessage = stringResource(Res.string.mtphoto_albums_loaded)
+    val browserAccessErrorMessage = stringResource(Res.string.mtphoto_browser_access_error)
+    val webMixedContentErrorMessage = stringResource(Res.string.mtphoto_web_mixed_content_error)
 
     fun effectiveApiKey(): String = if (apiKeyLocked) existingApiKeyPlain else apiKey
     fun effectivePassword(): String = if (passwordLocked) existingPasswordPlain else password
@@ -190,6 +185,19 @@ fun MTPhotoConfigPage(
         albumId = selectedAlbumId,
         albumName = selectedAlbumName.takeIf { selectedAlbumId != null },
     )
+
+    fun connectionFailureMessage(error: Throwable): String {
+        val problem = (error as? BrowserConnectionException)?.problem
+            ?: browserConnectionProblem(
+                baseUrl = buildSource().url,
+                error = error,
+            )
+        return when (problem) {
+            BrowserConnectionProblem.MixedContent -> webMixedContentErrorMessage
+            BrowserConnectionProblem.BrowserAccess -> browserAccessErrorMessage
+            null -> error.message ?: "MTPhoto connection failed"
+        }
+    }
 
     fun checkBaseFields(): Boolean {
         nameValid = checkName(name, showToast = true) {
@@ -231,9 +239,12 @@ fun MTPhotoConfigPage(
     }
 
     suspend fun refreshAlbums(selectSingleAlbum: Boolean): Result<List<MTPhotoAlbum>?> {
+        val requestedSource = buildSource()
+        browserConnectionProblem(baseUrl = requestedSource.url)?.let { problem ->
+            return Result.failure(BrowserConnectionException(problem))
+        }
         latestAlbumRequestId += 1
         val requestId = latestAlbumRequestId
-        val requestedSource = buildSource()
         val result = loadMTPhotoAlbumsWithTimeout {
             repo.getAlbums(requestedSource)
         }
@@ -272,7 +283,7 @@ fun MTPhotoConfigPage(
         if (mtPhotoSource == null || !secretsLoaded) return@LaunchedEffect
         refreshAlbums(selectSingleAlbum = false).onFailure { error ->
             error.printStackTrace()
-            ToastUtil.error(error.message ?: "Failed to load MTPhoto albums")
+            ToastUtil.error(connectionFailureMessage(error))
         }
     }
 
@@ -448,7 +459,7 @@ fun MTPhotoConfigPage(
                                     }
                                     .onFailure { error ->
                                         error.printStackTrace()
-                                        ToastUtil.error(error.message ?: "MTPhoto connection failed")
+                                        ToastUtil.error(connectionFailureMessage(error))
                                     }
                             } finally {
                                 checking = false

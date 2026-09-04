@@ -321,6 +321,7 @@
     <string name="album_generated_name_qq_default">QQ音乐歌单</string>
     <string name="album_generated_name_apple_default">AppleMusic歌单</string>
     <string name="album_generated_name_default">音乐歌单</string>
+    <string name="album_apple_web_unsupported">Apple Music 页面不允许浏览器跨域读取。请使用桌面端/移动端，或配置同源反向代理。</string>
     <string name="flip_demo_vertical_title">垂直翻转 (绕水平轴)</string>
     <string name="flip_demo_horizontal_title">水平翻转 (绕垂直轴)</string>
     <string name="flip_demo_back_to_front">翻回正面</string>
@@ -337,7 +338,14 @@
     <string name="featured_collections_photos">精选合集</string>
     <string name="my_collections_photos">我的合集</string>
     <string name="choose_collection">选择合集</string>
-    <string name="pexels_api_key">Pexels API 密钥</string>
+    <string name="pexels_api_key">Pexels API Key</string>
+    <string name="unsplash_api_key">Unsplash Access Key</string>
+    <string name="tmdb_api_read_access_token">TMDB API Read Access Token</string>
+    <string name="please_enter_your_api_token">请输入您的 API Read Access Token</string>
+    <string name="get_token">获取 Token</string>
+    <string name="tmdb_api_token_help">需要 TMDB API Read Access Token。获取 Token</string>
+    <string name="unsplash_api_key_help">需要 Unsplash Access Key。获取 Token</string>
+    <string name="pexels_api_key_help">需要 Pexels API Key。获取 Token</string>
     <string name="please_enter_your_api_key">请输入您的 API 密钥</string>
     <string name="please_choose_collection">请选择合集</string>
 
@@ -364,6 +372,11 @@
     <string name="mtphoto_password_required">请输入 MTPhoto 密码</string>
     <string name="mtphoto_album_required">请选择 MTPhoto 相册</string>
     <string name="mtphoto_albums_loaded">连接成功，请选择相册。</string>
+    <string name="mtphoto_web_mixed_content_error">当前 HTTPS 网页无法访问 HTTP MTPhoto 服务。请为 MTPhoto 启用 HTTPS，或使用同源反向代理。</string>
+    <string name="mtphoto_browser_access_error">浏览器无法访问 MTPhoto。请确认服务可用、允许 CORS 和 OPTIONS 请求，并授予本地网络访问权限。</string>
+    <string name="web_source_mixed_content_error">当前 HTTPS 网页无法访问 HTTP 类型源。请为类型源启用 HTTPS，或使用同源反向代理。</string>
+    <string name="web_source_browser_access_error">浏览器无法访问该类型源。请检查服务、证书、CORS/OPTIONS 策略和本地网络访问权限。</string>
+    <string name="webdav_browser_access_error">浏览器无法访问 WebDAV。服务端必须允许跨域 OPTIONS、PROPFIND 请求，并放行 Authorization、Depth 请求头；同时请检查证书和本地网络访问权限。</string>
 
     <!-- Source type categories -->
     <string name="source_type_category_local">本机</string>

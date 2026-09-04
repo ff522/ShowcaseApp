@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -37,12 +36,17 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.alpha.showcase.common.networkfile.storage.remote.TMDBSource
+import com.alpha.showcase.common.repo.ExternalImageApiKeyEdit
 import com.alpha.showcase.common.repo.ImageType
 import com.alpha.showcase.common.repo.Language
 import com.alpha.showcase.common.repo.Region
 import com.alpha.showcase.common.repo.TMDBSourceType
+import com.alpha.showcase.common.repo.TmdbConfigDraft
+import com.alpha.showcase.common.repo.shouldRequestTmdbApiToken
 import showcaseapp.composeapp.generated.resources.Res
 import com.alpha.showcase.common.theme.Dimen
+import com.alpha.showcase.common.ui.view.EXISTING_PASSWORD_PLACEHOLDER
+import com.alpha.showcase.common.ui.view.PasswordInput
 import com.alpha.showcase.common.utils.ToastUtil
 import com.alpha.showcase.common.utils.decodeName
 import com.alpha.showcase.common.utils.encodeName
@@ -56,9 +60,11 @@ import showcaseapp.composeapp.generated.resources.choose_type
 import showcaseapp.composeapp.generated.resources.language_of_film_content
 import showcaseapp.composeapp.generated.resources.name_is_invalid
 import showcaseapp.composeapp.generated.resources.name_require_hint
+import showcaseapp.composeapp.generated.resources.please_enter_your_api_token
 import showcaseapp.composeapp.generated.resources.save
 import showcaseapp.composeapp.generated.resources.show_movie_from_selected_region
 import showcaseapp.composeapp.generated.resources.test_connection
+import showcaseapp.composeapp.generated.resources.tmdb_api_read_access_token
 
 @Composable
 fun TMDBConfigPage(
@@ -69,6 +75,9 @@ fun TMDBConfigPage(
 
     var checkingState by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val editMode = tmdbSource != null
+    val existingStoredApiToken = tmdbSource?.apiToken
+    val userApiTokenRequired = shouldRequestTmdbApiToken()
 
     var selectedTypeIndex by remember {
         mutableIntStateOf(tmdbSource?.contentType?.let {
@@ -94,6 +103,11 @@ fun TMDBConfigPage(
     var name by rememberSaveable(key = "name") {
         mutableStateOf(tmdbSource?.name?.decodeName() ?: "")
     }
+    var apiToken by remember(existingStoredApiToken) { mutableStateOf("") }
+    var apiTokenChanged by rememberSaveable {
+        mutableStateOf(existingStoredApiToken.isNullOrBlank())
+    }
+    var apiTokenVisible by rememberSaveable { mutableStateOf(false) }
 
     val movieType by remember {
         derivedStateOf {
@@ -117,8 +131,42 @@ fun TMDBConfigPage(
         }
     }
 
-    val editMode = tmdbSource != null
     val focusRequester = remember { FocusRequester() }
+    val apiTokenEdit = ExternalImageApiKeyEdit(
+        input = apiToken,
+        existingStoredValue = existingStoredApiToken,
+        changed = apiTokenChanged,
+    )
+    val nameInvalidText = stringResource(Res.string.name_is_invalid)
+    val apiTokenRequiredText = stringResource(Res.string.please_enter_your_api_token)
+
+    fun buildSource(): TMDBSource {
+        return TmdbConfigDraft(
+            name = name.encodeName(),
+            contentType = movieType.type,
+            language = language.value,
+            region = region.value,
+            imageType = imageType.value,
+            apiTokenEdit = apiTokenEdit,
+            storeApiToken = userApiTokenRequired,
+        ).toSource { it }
+    }
+
+    fun isValid(): Boolean {
+        return when {
+            name.isBlank() -> {
+                ToastUtil.error(nameInvalidText)
+                false
+            }
+
+            userApiTokenRequired && apiTokenEdit.isMissing -> {
+                ToastUtil.error(apiTokenRequiredText)
+                false
+            }
+
+            else -> true
+        }
+    }
 
     Column(
         verticalArrangement = Arrangement.Top,
@@ -148,6 +196,28 @@ fun TMDBConfigPage(
         )
         Spacer(modifier = Modifier.height(16.dp))
 
+        if (userApiTokenRequired) {
+            PasswordInput(
+                password = if (apiTokenEdit.isLocked) EXISTING_PASSWORD_PLACEHOLDER else apiToken,
+                passwordVisible = apiTokenVisible,
+                editMode = editMode,
+                readOnly = apiTokenEdit.isLocked,
+                label = stringResource(Res.string.tmdb_api_read_access_token),
+                onPasswordChange = { value ->
+                    if (apiTokenEdit.isLocked) {
+                        apiTokenChanged = true
+                        apiToken = ""
+                        apiTokenVisible = false
+                    } else {
+                        apiTokenChanged = true
+                        apiToken = value.trim()
+                    }
+                },
+                onPasswordVisibleChanged = { apiTokenVisible = it },
+            )
+            ApiTokenHelp(ApiTokenProvider.Tmdb)
+        }
+
         LargeDropdownMenu(
             label = stringResource(Res.string.choose_type),
             items = movieTypes.map { stringResource(it.titleRes) },
@@ -170,7 +240,7 @@ fun TMDBConfigPage(
             style = MaterialTheme.typography.labelSmall
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(4.dp))
 
         LargeDropdownMenu(
             label = stringResource(Res.string.choose_region),
@@ -185,7 +255,7 @@ fun TMDBConfigPage(
             style = MaterialTheme.typography.labelSmall
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(4.dp))
 
         LargeDropdownMenu(
             label = stringResource(Res.string.choose_image_type),
@@ -203,20 +273,13 @@ fun TMDBConfigPage(
                 if (!checkingState) {
                     scope.launch {
 
-                        if (name.isEmpty()) {
-                            ToastUtil.error(Res.string.name_is_invalid)
-                        } else {
+                        if (isValid()) {
                             checkingState = true
-                            onTestClick.invoke(
-                                TMDBSource(
-                                    name.encodeName(),
-                                    movieType.type,
-                                    language.value,
-                                    region.value,
-                                    imageType.value
-                                )
-                            )
-                            checkingState = false
+                            try {
+                                onTestClick(buildSource())
+                            } finally {
+                                checkingState = false
+                            }
                         }
                     }
                 }
@@ -236,19 +299,9 @@ fun TMDBConfigPage(
             }
 
             ElevatedButton(onClick = {
-                if (name.isEmpty()) {
-                    ToastUtil.error(Res.string.name_is_invalid)
-                } else {
+                if (isValid()) {
                     scope.launch {
-                        onSaveClick.invoke(
-                            TMDBSource(
-                                name.encodeName(),
-                                movieType.type,
-                                language.value,
-                                region.value,
-                                imageType.value
-                            )
-                        )
+                        onSaveClick(buildSource())
                     }
                 }
 
